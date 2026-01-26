@@ -33,7 +33,7 @@ function findProjectRoot(startPath = __dirname) {
   }
 
   // If we can't find it, use process.cwd() as fallback
-  return process.cwd();
+  return process.env.INIT_CWD || process.cwd();
 }
 
 // Cache the project root after first calculation

@@ -11,7 +11,7 @@ const chalk = require('chalk');
 /**
  * Find BMAD directory in project
  */
-function findBmadDir(projectDir = process.cwd()) {
+function findBmadDir(projectDir = process.env.INIT_CWD || process.cwd()) {
   const possibleNames = ['_bmad'];
 
   for (const name of possibleNames) {
@@ -83,7 +83,7 @@ async function updateManifest(manifestPath, projectRoot) {
  * Main migration function
  */
 async function migrate(directory) {
-  const projectRoot = path.resolve(directory || process.cwd());
+  const projectRoot = path.resolve(directory || process.env.INIT_CWD || process.cwd());
   const bmadDir = findBmadDir(projectRoot);
 
   if (!bmadDir) {

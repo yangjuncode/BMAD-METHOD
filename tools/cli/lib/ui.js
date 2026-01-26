@@ -354,7 +354,7 @@ class UI {
     const { Installer } = require('../installers/lib/core/installer');
     const detector = new Detector();
     const installer = new Installer();
-    const bmadResult = await installer.findBmadDir(projectDir || process.cwd());
+    const bmadResult = await installer.findBmadDir(projectDir || process.env.INIT_CWD || process.cwd());
     const bmadDir = bmadResult.bmadDir;
     const existingInstall = await detector.detect(bmadDir);
     const configuredIdes = existingInstall.ides || [];
@@ -862,15 +862,15 @@ class UI {
     // Use sync validation because @clack/prompts doesn't support async validate
     const directory = await prompts.text({
       message: 'Installation directory:',
-      default: process.cwd(),
-      placeholder: process.cwd(),
+      default: process.env.INIT_CWD || process.cwd(),
+      placeholder: process.env.INIT_CWD || process.cwd(),
       validate: (input) => this.validateDirectorySync(input),
     });
 
     // Apply filter logic
     let filteredDir = directory;
     if (!filteredDir || filteredDir.trim() === '') {
-      filteredDir = process.cwd();
+      filteredDir = process.env.INIT_CWD || process.cwd();
     } else {
       filteredDir = this.expandUserPath(filteredDir);
     }

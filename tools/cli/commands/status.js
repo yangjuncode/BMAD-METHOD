@@ -15,7 +15,7 @@ module.exports = {
   action: async (options) => {
     try {
       // Find the bmad directory
-      const projectDir = process.cwd();
+      const projectDir = process.env.INIT_CWD || process.cwd();
       const { bmadDir } = await installer.findBmadDir(projectDir);
 
       // Check if bmad directory exists
