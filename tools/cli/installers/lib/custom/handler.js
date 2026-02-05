@@ -256,7 +256,7 @@ class CustomHandler {
 
               // Replace placeholders
               content = content.replaceAll('{user_name}', config.user_name || 'User');
-              content = content.replaceAll('{communication_language}', config.communication_language || 'Chinese');
+              content = content.replaceAll('{communication_language}', config.communication_language || '中文');
               content = content.replaceAll('{output_folder}', config.output_folder || 'docs');
 
               // Write to target
@@ -333,7 +333,7 @@ class CustomHandler {
         // Replace placeholders in the compiled content
         let processedXml = xml;
         processedXml = processedXml.replaceAll('{user_name}', config.user_name || 'User');
-        processedXml = processedXml.replaceAll('{communication_language}', config.communication_language || 'Chinese');
+        processedXml = processedXml.replaceAll('{communication_language}', config.communication_language || '中文');
         processedXml = processedXml.replaceAll('{output_folder}', config.output_folder || 'docs');
 
         // Write the compiled MD file
