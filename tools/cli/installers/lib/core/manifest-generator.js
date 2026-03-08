@@ -5,6 +5,12 @@ const crypto = require('node:crypto');
 const csv = require('csv-parse/sync');
 const { getSourcePath, getModulePath } = require('../../../lib/project-root');
 const prompts = require('../../../lib/prompts');
+const {
+  loadSkillManifest: loadSkillManifestShared,
+  getCanonicalId: getCanonicalIdShared,
+  getArtifactType: getArtifactTypeShared,
+  getInstallToBmad: getInstallToBmadShared,
+} = require('../ide/shared/skill-manifest');
 
 // Load package.json for version info
 const packageJson = require('../../../../../package.json');
@@ -15,12 +21,33 @@ const packageJson = require('../../../../../package.json');
 class ManifestGenerator {
   constructor() {
     this.workflows = [];
+    this.skills = [];
     this.agents = [];
     this.tasks = [];
     this.tools = [];
     this.modules = [];
     this.files = [];
     this.selectedIdes = [];
+  }
+
+  /** Delegate to shared skill-manifest module */
+  async loadSkillManifest(dirPath) {
+    return loadSkillManifestShared(dirPath);
+  }
+
+  /** Delegate to shared skill-manifest module */
+  getCanonicalId(manifest, filename) {
+    return getCanonicalIdShared(manifest, filename);
+  }
+
+  /** Delegate to shared skill-manifest module */
+  getArtifactType(manifest, filename) {
+    return getArtifactTypeShared(manifest, filename);
+  }
+
+  /** Delegate to shared skill-manifest module */
+  getInstallToBmad(manifest, filename) {
+    return getInstallToBmadShared(manifest, filename);
   }
 
   /**
@@ -78,6 +105,9 @@ class ManifestGenerator {
     // Filter out any undefined/null values from IDE list
     this.selectedIdes = resolvedIdes.filter((ide) => ide && typeof ide === 'string');
 
+    // Reset files list (defensive: prevent stale data if instance is reused)
+    this.files = [];
+
     // Collect workflow data
     await this.collectWorkflows(selectedModules);
 
@@ -94,6 +124,7 @@ class ManifestGenerator {
     const manifestFiles = [
       await this.writeMainManifest(cfgDir),
       await this.writeWorkflowManifest(cfgDir),
+      await this.writeSkillManifest(cfgDir),
       await this.writeAgentManifest(cfgDir),
       await this.writeTaskManifest(cfgDir),
       await this.writeToolManifest(cfgDir),
@@ -116,6 +147,7 @@ class ManifestGenerator {
    */
   async collectWorkflows(selectedModules) {
     this.workflows = [];
+    this.skills = [];
 
     // Use updatedModules which already includes deduplicated 'core' + selectedModules
     for (const moduleName of this.updatedModules) {
@@ -150,6 +182,8 @@ class ManifestGenerator {
     // Recursively find workflow.yaml files
     const findWorkflows = async (dir, relativePath = '') => {
       const entries = await fs.readdir(dir, { withFileTypes: true });
+      // Load skill manifest for this directory (if present)
+      const skillManifest = await this.loadSkillManifest(dir);
 
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
@@ -215,12 +249,32 @@ class ManifestGenerator {
                   ? `${this.bmadFolderName}/core/workflows/${relativePath}/${entry.name}`
                   : `${this.bmadFolderName}/${moduleName}/workflows/${relativePath}/${entry.name}`;
 
+              // Check if this is a type:skill entry — collect separately, skip workflow CSV
+              const artifactType = this.getArtifactType(skillManifest, entry.name);
+              if (artifactType === 'skill') {
+                const canonicalId = path.basename(dir);
+                this.skills.push({
+                  name: workflow.name,
+                  description: this.cleanForCSV(workflow.description),
+                  module: moduleName,
+                  path: installPath,
+                  canonicalId,
+                  install_to_bmad: this.getInstallToBmad(skillManifest, entry.name),
+                });
+
+                if (debug) {
+                  console.log(`[DEBUG] ✓ Added skill (skipped workflow CSV): ${workflow.name} as ${canonicalId}`);
+                }
+                continue;
+              }
+
               // Workflows with standalone: false are filtered out above
               workflows.push({
                 name: workflow.name,
                 description: this.cleanForCSV(workflow.description),
                 module: moduleName,
                 path: installPath,
+                canonicalId: this.getCanonicalId(skillManifest, entry.name),
               });
 
               // Add to files list
@@ -294,6 +348,8 @@ class ManifestGenerator {
   async getAgentsFromDir(dirPath, moduleName, relativePath = '') {
     const agents = [];
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    // Load skill manifest for this directory (if present)
+    const skillManifest = await this.loadSkillManifest(dirPath);
 
     for (const entry of entries) {
       const fullPath = path.join(dirPath, entry.name);
@@ -349,6 +405,7 @@ class ManifestGenerator {
           principles: principlesMatch ? this.cleanForCSV(principlesMatch[1]) : '',
           module: moduleName,
           path: installPath,
+          canonicalId: this.getCanonicalId(skillManifest, entry.name),
         });
 
         // Add to files list
@@ -388,6 +445,8 @@ class ManifestGenerator {
   async getTasksFromDir(dirPath, moduleName) {
     const tasks = [];
     const files = await fs.readdir(dirPath);
+    // Load skill manifest for this directory (if present)
+    const skillManifest = await this.loadSkillManifest(dirPath);
 
     for (const file of files) {
       // Check for both .xml and .md files
@@ -447,6 +506,7 @@ class ManifestGenerator {
           module: moduleName,
           path: installPath,
           standalone: standalone,
+          canonicalId: this.getCanonicalId(skillManifest, file),
         });
 
         // Add to files list
@@ -486,6 +546,8 @@ class ManifestGenerator {
   async getToolsFromDir(dirPath, moduleName) {
     const tools = [];
     const files = await fs.readdir(dirPath);
+    // Load skill manifest for this directory (if present)
+    const skillManifest = await this.loadSkillManifest(dirPath);
 
     for (const file of files) {
       // Check for both .xml and .md files
@@ -545,6 +607,7 @@ class ManifestGenerator {
           module: moduleName,
           path: installPath,
           standalone: standalone,
+          canonicalId: this.getCanonicalId(skillManifest, file),
         });
 
         // Add to files list
@@ -735,8 +798,8 @@ class ManifestGenerator {
     const csvPath = path.join(cfgDir, 'workflow-manifest.csv');
     const escapeCsv = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
 
-    // Create CSV header - standalone column removed, everything is canonicalized to 4 columns
-    let csv = 'name,description,module,path\n';
+    // Create CSV header - standalone column removed, canonicalId added as optional column
+    let csv = 'name,description,module,path,canonicalId\n';
 
     // Build workflows map from discovered workflows only
     // Old entries are NOT preserved - the manifest reflects what actually exists on disk
@@ -750,16 +813,49 @@ class ManifestGenerator {
         description: workflow.description,
         module: workflow.module,
         path: workflow.path,
+        canonicalId: workflow.canonicalId || '',
       });
     }
 
     // Write all workflows
     for (const [, value] of allWorkflows) {
-      const row = [escapeCsv(value.name), escapeCsv(value.description), escapeCsv(value.module), escapeCsv(value.path)].join(',');
+      const row = [
+        escapeCsv(value.name),
+        escapeCsv(value.description),
+        escapeCsv(value.module),
+        escapeCsv(value.path),
+        escapeCsv(value.canonicalId),
+      ].join(',');
       csv += row + '\n';
     }
 
     await fs.writeFile(csvPath, csv);
+    return csvPath;
+  }
+
+  /**
+   * Write skill manifest CSV
+   * @returns {string} Path to the manifest file
+   */
+  async writeSkillManifest(cfgDir) {
+    const csvPath = path.join(cfgDir, 'skill-manifest.csv');
+    const escapeCsv = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+
+    let csvContent = 'canonicalId,name,description,module,path,install_to_bmad\n';
+
+    for (const skill of this.skills) {
+      const row = [
+        escapeCsv(skill.canonicalId),
+        escapeCsv(skill.name),
+        escapeCsv(skill.description),
+        escapeCsv(skill.module),
+        escapeCsv(skill.path),
+        escapeCsv(skill.install_to_bmad),
+      ].join(',');
+      csvContent += row + '\n';
+    }
+
+    await fs.writeFile(csvPath, csvContent);
     return csvPath;
   }
 
@@ -784,8 +880,8 @@ class ManifestGenerator {
       }
     }
 
-    // Create CSV header with persona fields
-    let csvContent = 'name,displayName,title,icon,capabilities,role,identity,communicationStyle,principles,module,path\n';
+    // Create CSV header with persona fields and canonicalId
+    let csvContent = 'name,displayName,title,icon,capabilities,role,identity,communicationStyle,principles,module,path,canonicalId\n';
 
     // Combine existing and new agents, preferring new data for duplicates
     const allAgents = new Map();
@@ -810,6 +906,7 @@ class ManifestGenerator {
         principles: agent.principles,
         module: agent.module,
         path: agent.path,
+        canonicalId: agent.canonicalId || '',
       });
     }
 
@@ -827,6 +924,7 @@ class ManifestGenerator {
         escapeCsv(record.principles),
         escapeCsv(record.module),
         escapeCsv(record.path),
+        escapeCsv(record.canonicalId),
       ].join(',');
       csvContent += row + '\n';
     }
@@ -856,8 +954,8 @@ class ManifestGenerator {
       }
     }
 
-    // Create CSV header with standalone column
-    let csvContent = 'name,displayName,description,module,path,standalone\n';
+    // Create CSV header with standalone and canonicalId columns
+    let csvContent = 'name,displayName,description,module,path,standalone,canonicalId\n';
 
     // Combine existing and new tasks
     const allTasks = new Map();
@@ -877,6 +975,7 @@ class ManifestGenerator {
         module: task.module,
         path: task.path,
         standalone: task.standalone,
+        canonicalId: task.canonicalId || '',
       });
     }
 
@@ -889,6 +988,7 @@ class ManifestGenerator {
         escapeCsv(record.module),
         escapeCsv(record.path),
         escapeCsv(record.standalone),
+        escapeCsv(record.canonicalId),
       ].join(',');
       csvContent += row + '\n';
     }
@@ -918,8 +1018,8 @@ class ManifestGenerator {
       }
     }
 
-    // Create CSV header with standalone column
-    let csvContent = 'name,displayName,description,module,path,standalone\n';
+    // Create CSV header with standalone and canonicalId columns
+    let csvContent = 'name,displayName,description,module,path,standalone,canonicalId\n';
 
     // Combine existing and new tools
     const allTools = new Map();
@@ -939,6 +1039,7 @@ class ManifestGenerator {
         module: tool.module,
         path: tool.path,
         standalone: tool.standalone,
+        canonicalId: tool.canonicalId || '',
       });
     }
 
@@ -951,6 +1052,7 @@ class ManifestGenerator {
         escapeCsv(record.module),
         escapeCsv(record.path),
         escapeCsv(record.standalone),
+        escapeCsv(record.canonicalId),
       ].join(',');
       csvContent += row + '\n';
     }
